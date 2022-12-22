@@ -10,22 +10,38 @@ import 'package:melodizr_editor/src/text_field.dart';
 // auto scrolling => done
 // WidgetSpan instead of hardcoded Draggable => done
 // last line bug => done
-
-// selection ignore widget
+// make functions smaller and more readable => part done
 
 class MelodizrTextEditor extends StatefulWidget {
-  const MelodizrTextEditor({
+  const MelodizrTextEditor(
+    this.style,
+    this.hovercolor, {
     super.key,
-    required this.controller,
+    required this.path,
+    required this.toolbar,
+    required this.regexMap,
+    required this.placeholder,
+    required this.feedback,
   });
+  // toolbar to add widget to the text
+  final Widget toolbar;
 
-  final MelodizrController controller;
-  final TextStyle style = const TextStyle(
-      color: Colors.black,
-      fontSize: 20,
-      fontWeight: FontWeight.w500,
-      decorationThickness: 0.001,
-      height: 1.6);
+  // map with regex an the widget it should return
+  final Map<RegExp, InlineSpan> regexMap;
+
+  // default text style
+  final TextStyle? style;
+  final Widget placeholder;
+
+  // widget while the user is dragging
+  final Widget feedback;
+
+  // path inside the widegt => e.g. an url
+  final String path;
+
+  // color of line under the currently hovered text line
+  final Color? hovercolor;
+
   @override
   State<MelodizrTextEditor> createState() => _MelodizrTextEditorState();
 }
@@ -34,17 +50,41 @@ class _MelodizrTextEditorState extends State<MelodizrTextEditor> {
   final _textkey = GlobalKey<EditableTextState>();
   final _fieldKey = GlobalKey();
 
-  final List<Rect> _textRects = [];
+  // rectangle of the currently hovered renderbox
   Rect? _currentRect;
 
+  // controller to handle auto scroll
   late ScrollController _scrollController;
 
+  // custom TextEdititingController
   late MelodizrController _controller;
+
+  // very ugly solution => we store the last text value to check if the user changed the text
+  // there is no implimentation inside flutter to track soft keyboard input since it comes in event
+  // which are triggered in a different way than a hardware keyboard
+  String lastTextValue = '';
+
+  // holds the textline position inside the text where the user started to drag the widget
+  int? dragStartIndex;
 
   @override
   void initState() {
     super.initState();
-    _controller = MelodizrController(widget: _customDraggble());
+    _controller = MelodizrController(
+      widget.style ??
+          const TextStyle(
+              color: Colors.black,
+              fontSize: 20,
+              fontWeight: FontWeight.w500,
+              decorationThickness: 0.001,
+              height: 1.2),
+      widget: _customDraggble(),
+      regexMap: widget.regexMap,
+    );
+
+    // A Textfield has a method called 'onChanged' but this method gets only called if the text changes
+    // but we want to be notified if the value inside the controller changes
+    _controller.addListener(_valueChanged);
     _scrollController = ScrollController();
   }
 
@@ -52,70 +92,103 @@ class _MelodizrTextEditorState extends State<MelodizrTextEditor> {
   // TODO because the User can movehis finger before a LongPress.. captures the position
   Widget _customDraggble() {
     return Draggable(
-      axis: Axis.vertical,
-      affinity: Axis.vertical,
-      maxSimultaneousDrags: 1,
-      onDragEnd: ((details) => _dragEnd(details)),
-      onDragUpdate: ((details) => _dragUpdate(details)),
-      feedback: _buildAudio(
-        'sd',
-        0.2,
-        35,
-        width: 200,
-      ),
-      childWhenDragging: const SizedBox.shrink(),
-      child: _buildAudio('sds', 0.3, 40),
-    );
+        data: '',
+        axis: Axis.vertical,
+        affinity: Axis.vertical,
+        maxSimultaneousDrags: 1,
+        onDragEnd: ((details) => _dragEnd(details)),
+        onDragUpdate: ((details) => _dragUpdate(details)),
+        feedback: widget.feedback,
+        childWhenDragging: const SizedBox.shrink(),
+        child: widget.placeholder //_buildAudio('sds', 0.3, 40),
+        );
   }
 
-  Widget _buildAudio(
-    String text,
-    double opacity,
-    double height, {
-    double? width,
-  }) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
-      child: Container(
-        width: width,
-        height: height,
-        decoration: BoxDecoration(
-          borderRadius: const BorderRadius.all(
-            Radius.circular(5),
-          ),
-          color: Colors.red.withOpacity(opacity),
-        ),
-        child: Center(
-          child: Row(
-            children: [],
-          ),
-        ),
-      ),
-    );
-  }
+  bool _checkIfUserIsInsideTheWidget(int cursorPos) {
+    // since we add an audio widget the selection sytsem of flutter counts it as selectble
+    // if the user clicks on it he is inside the identifier and can change the path
+    // to prevent this we check if he is inside and if its true we move him out before he can do anything
 
-  @override
-  void dispose() {
-    _controller.dispose();
-    _scrollController.dispose();
-    super.dispose();
-  }
-
-  int? startIndex;
-
-  void _dragUpdate(DragUpdateDetails details) {
-    if (_renderer == null) {
-      return;
+    // The text is empty => the user cant be inside the widget
+    if (_controller.value.text.isEmpty) {
+      return false;
     }
-    final allTextRects = _getRectsForHoverUnderline(
-      TextSelection(
-        baseOffset: 0,
-        extentOffset: _controller.text.characters.length,
-      ),
+    //
+    if (cursorPos == _controller.value.text.length) {
+      return false;
+    }
+    String textAfterCursor =
+        _controller.value.text.substring(cursorPos, cursorPos + 1);
+    if (textAfterCursor == '文') {
+      // the user is inside the widget
+      return true;
+    }
+    return false;
+  }
+
+  void _moveUserOutofWidget(int cursorPos) {
+    // moves currently only the cursor but you hae to manually click again
+    // not the best solution but it works for now
+    TextSelection newSelection = TextSelection(
+      baseOffset: cursorPos - 1,
+      extentOffset: cursorPos - 1,
+    );
+    _controller.value = TextEditingValue(
+      selection: newSelection,
+      text: _controller.value.text,
+      composing: _controller.value.composing,
+    );
+  }
+
+  void _deleteIdentifierWithPath(int cursorPos) {
+    String suffixText = _controller.text.substring(cursorPos);
+
+    // text berfore the cursor pos minus the path
+    String prefixText =
+        _controller.text.substring(0, cursorPos - (widget.path.length + 1));
+
+    String newText = prefixText + suffixText;
+
+    // new selection => cursor to the end
+    TextSelection newSelection = TextSelection(
+      baseOffset: prefixText.length,
+      extentOffset: prefixText.length,
     );
 
-    // Auto-Scroll start
+    // needs to be updated here, otherwise the funciton is recursive
+    lastTextValue = newText;
 
+    setState(
+      () {
+        _controller.value = TextEditingValue(
+            text: newText,
+            selection: newSelection,
+            composing: const TextRange.collapsed(0));
+      },
+    );
+  }
+
+  // TextValue changed
+  void _valueChanged() {
+    int cursorPos = _controller.selection.base.offset;
+
+    if (_checkIfUserIsInsideTheWidget(cursorPos)) {
+      _moveUserOutofWidget(cursorPos);
+    }
+
+    // user deleted text
+    if (lastTextValue.length > _controller.text.length) {
+      // user deleted identifier
+      if (lastTextValue.substring(cursorPos, cursorPos + 1) == '文') {
+        // text after the cursor position
+        _deleteIdentifierWithPath(cursorPos);
+        return;
+      }
+    }
+    lastTextValue = _controller.text;
+  }
+
+  _handleAutoScroll(DragUpdateDetails details) {
     // TODO you have to move the item to keep scrolling => should scroll while keeping the position
     const moveDistance = 3;
     Offset pos = fieldBox.localToGlobal(Offset.zero);
@@ -130,18 +203,31 @@ class _MelodizrTextEditorState extends State<MelodizrTextEditor> {
     if (details.globalPosition.dy > (pos.dy + fieldBox.size.height) - range) {
       _scrollController.jumpTo(_scrollController.offset + moveDistance);
     }
-    // Auto-Scroll end
+  }
+
+  void _dragUpdate(DragUpdateDetails details) {
+    if (_renderer == null) {
+      return;
+    }
+    final allTextRects = _getRectsForHoverUnderline(
+      TextSelection(
+        baseOffset: 0,
+        extentOffset: _controller.text.characters.length,
+      ),
+    );
+
+    _handleAutoScroll(details);
 
     for (final rect in allTextRects) {
       //
       RenderBox? box = context.findRenderObject() as RenderBox;
       var hoverPos = box.globalToLocal(details.globalPosition);
 
-      if (startIndex == null) {
+      if (dragStartIndex == null) {
         final hoverTestBaseOffset =
             _renderer.getPositionForPoint(details.globalPosition);
         final currentLine = _renderer.getLineAtOffset(hoverTestBaseOffset);
-        startIndex = currentLine.base.offset;
+        dragStartIndex = currentLine.base.offset;
       }
       if (rect.contains(hoverPos)) {
         // only called if startIndex is null to set an initial index
@@ -175,22 +261,24 @@ class _MelodizrTextEditorState extends State<MelodizrTextEditor> {
 
       // only called, if we hover over a textWidget
       if (rect.contains(hoverPos)) {
-        _currentRect = rect;
         try {
           final hoverTestBaseOffset =
               _renderer.getPositionForPoint(details.offset);
           final currentLine = _renderer.getLineAtOffset(hoverTestBaseOffset);
 
-          currentLine.base.offset;
-
+          // print(
+          //     'Range: ${_controller.value.text.substring(startIndex! - (1 + widget.path.length), (startIndex! + 1))}');
           _controller.value = _controller.value.replaced(
-              TextRange(start: startIndex!, end: startIndex! + 1), '');
-          //_editableState.performAction(TextInputAction.newline);
+              TextRange(
+                start: dragStartIndex! - (1 + widget.path.length),
+                end: (dragStartIndex! + 1),
+              ),
+              '');
 
           var currentPos = currentLine.extent.offset;
 
           // Add new text on cursor position
-          String specialChars = '字';
+          String specialChars = '字${widget.path}文';
           int length = specialChars.length;
 
           if (currentPos > _controller.text.length) {
@@ -200,39 +288,50 @@ class _MelodizrTextEditorState extends State<MelodizrTextEditor> {
               extentOffset: _controller.text.length + length,
             );
           } else {
-            // Right text of cursor position
-            String suffixText = _controller.text.substring(currentPos);
-
-            // Get the left text of cursor
-            String prefixText = _controller.text.substring(0, currentPos);
-
-            _controller.text = prefixText + specialChars + suffixText;
-
-            // Cursor move to end of added text
-            _controller.selection = TextSelection(
-              baseOffset: currentPos + length,
-              extentOffset: currentPos + length,
-            );
+            _insertIdentifier(currentPos);
           }
         } catch (e) {
           print(e);
         }
-
         setState(() {
-          startIndex = null;
+          dragStartIndex = null;
         });
       }
     }
   }
 
-  EditableTextState get _editableState => _textkey.currentState
-      as EditableTextState; //_textkey.currentState as EditableTextState;
+  void _insertIdentifier(int pos) {
+    // text after pos
+    String suffixText = _controller.text.substring(pos);
 
-  RenderEditable get _secondRenderer => _editableState.renderEditable;
+    // identfier for the Widget => is a random chinese sign to prevent the user from using it
+    // TODO find a save alternitive
+    String identifier = '字${widget.path}文';
 
-  RenderEditable get _renderer =>
-      _textkey.currentState!.renderEditable; //_editableState.renderEditable;
+    int length = identifier.length;
 
+    // text before the pos
+    String prefixText = _controller.text.substring(0, pos);
+
+    String newText = prefixText + identifier + suffixText;
+
+    //new selection
+    TextSelection selection = TextSelection(
+      baseOffset: pos + length,
+      extentOffset: pos + length,
+    );
+
+    // Cursor move to end of added text
+    _controller.value = TextEditingValue(
+        text: newText,
+        selection: selection,
+        composing: const TextRange.collapsed(-1));
+  }
+
+  // gets the RenderObject of the EditableTextWidget => the EditableTextWidget is by default instantiated by the TextField
+  RenderEditable get _renderer => _textkey.currentState!.renderEditable;
+
+  // RenderObject of the Textfield => needed for the auto-scroller
   RenderBox get fieldBox =>
       _fieldKey.currentContext?.findRenderObject() as RenderBox;
 
@@ -254,7 +353,7 @@ class _MelodizrTextEditorState extends State<MelodizrTextEditor> {
         } else {
           return CustomPaint(
             painter: HoverLinePainter(
-              color: Colors.red,
+              color: widget.hovercolor ?? Colors.red.withOpacity(0.7),
               rects: _currentRect,
               fill: false,
             ),
@@ -270,6 +369,7 @@ class _MelodizrTextEditorState extends State<MelodizrTextEditor> {
         autofocus: true,
         keyboardType: TextInputType.multiline,
         maxLines: 99999,
+
         //key: _textkey,
         controller: _controller,
         focusNode: FocusNode(),
@@ -287,31 +387,19 @@ class _MelodizrTextEditorState extends State<MelodizrTextEditor> {
           alignment: Alignment.bottomCenter,
           child: GestureDetector(
             onTap: () {
-              var cursorPos = _controller.selection.base.offset;
-
-              String suffixText = _controller.text.substring(cursorPos);
-
-              var path = 'https://dfgkdfgndnf';
-
-              String specialChar = '字';
-              int length = specialChar.length;
-
-              String prefixText = _controller.text.substring(0, cursorPos);
-
-              _controller.text = prefixText + specialChar + suffixText;
-
-              // Cursor move to end of added text
-              _controller.selection = TextSelection(
-                baseOffset: cursorPos + length,
-                extentOffset: cursorPos + length,
-              );
+              int cursorPos = _controller.selection.base.offset;
+              _insertIdentifier(cursorPos);
             },
-            child: Container(
-              color: Colors.red,
-              height: 30,
-            ),
-          ))
+            child: widget.toolbar,
+          )),
     ];
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _scrollController.dispose();
+    super.dispose();
   }
 
   @override
@@ -319,8 +407,3 @@ class _MelodizrTextEditorState extends State<MelodizrTextEditor> {
     return Stack(children: _buildTextField());
   }
 }
-
-/*Map<RegExp, TextStyle> patternUser = {
-    RegExp(r"\B@[a-zA-Z0-9]+\b"):
-        const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold)
-  };*/
