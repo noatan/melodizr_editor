@@ -25,7 +25,7 @@ class HoverLinePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(HoverLinePainter other) {
+  bool shouldRepaint(HoverLinePainter oldDelegate) {
     return true;
   }
 }

@@ -206,6 +206,7 @@ class _MelodizrTextEditorState extends State<MelodizrTextEditor> {
   }
 
   void _dragUpdate(DragUpdateDetails details) {
+    // ignore: unnecessary_null_comparison
     if (_renderer == null) {
       return;
     }
@@ -243,6 +244,7 @@ class _MelodizrTextEditorState extends State<MelodizrTextEditor> {
     DraggableDetails details,
   ) {
     _currentRect = null;
+    // ignore: unnecessary_null_comparison
     if (_renderer == null) {
       return;
     }
@@ -291,7 +293,7 @@ class _MelodizrTextEditorState extends State<MelodizrTextEditor> {
             _insertIdentifier(currentPos);
           }
         } catch (e) {
-          print(e);
+          debugPrint(e.toString());
         }
         setState(() {
           dragStartIndex = null;
